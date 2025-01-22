@@ -166,10 +166,10 @@ quickhull points =
 -- ----------------
 
 propagateL :: Elt a => Acc (Vector Bool) -> Acc (Vector a) -> Acc (Vector a)
-propagateL = error "TODO: propagateL"
+propagateL headFlags values = segmentedScanl1 (\_ b -> b) headFlags values
 
 propagateR :: Elt a => Acc (Vector Bool) -> Acc (Vector a) -> Acc (Vector a)
-propagateR = error "TODO: propagateR"
+propagateR headFlags values = segmentedScanr1 (\_ b -> b) headFlags values
 
 shiftHeadFlagsL :: Acc (Vector Bool) -> Acc (Vector Bool)
 shiftHeadFlagsL vector = scanr const expTrue (tail vector)
@@ -178,10 +178,11 @@ shiftHeadFlagsR :: Acc (Vector Bool) -> Acc (Vector Bool)
 shiftHeadFlagsR vector = scanl (\_ b -> b) expTrue (init vector)
 
 segmentedScanl1 :: Elt a => (Exp a -> Exp a -> Exp a) -> Acc (Vector Bool) -> Acc (Vector a) -> Acc (Vector a)
-segmentedScanl1 = error "TODO: segmentedScanl1"
+segmentedScanl1 f headFlags values = map snd (scanl1 (segmented f) (zip headFlags values))
 
 segmentedScanr1 :: Elt a => (Exp a -> Exp a -> Exp a) -> Acc (Vector Bool) -> Acc (Vector a) -> Acc (Vector a)
-segmentedScanr1 = error "TODO: segmentedScanr1"
+segmentedScanr1 f headflags values = map snd (scanr1 (segmented f) (zip headFlags values))
+
 
 
 -- Given utility functions
