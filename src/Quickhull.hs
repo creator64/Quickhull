@@ -23,8 +23,6 @@ module Quickhull (
 ) where
 
 import Data.Array.Accelerate
-import Data.Array.Accelerate.Debug.Trace
-import qualified Prelude                      as P
 import Data.Array.Accelerate.Data.Maybe (isJust, maybe)
 import Data.Array.Accelerate.Smart
 
@@ -145,14 +143,15 @@ boolToOffsetSegmented headFlags array = map (\i -> i - 1) $ segmentedScanl1 (+) 
     arrayToInt = map (\b -> if b then 1 else 0) array
 
 partition :: Acc SegmentedPoints -> Acc SegmentedPoints
-partition (T2 headFlags points) =
-  T2 newHeadFlags newPoints where
-    lines = zip (propagateR headFlags points) (propagateL headFlags points) :: Acc (Vector Line)
+-- if everything is on the hull, there is no need for processing
+partition sp@(T2 headFlags points) = if the $ all (==expTrue) headFlags then sp else
+  T2 newReducedHeadFlags newPoints where
+    lines = zip (propagateL headFlags points) (propagateR headFlags points) :: Acc (Vector Line)
     -- distances =                [_, (p0, 15), (p1, 10), (p2, 20), _, (p4, 6), (p5, 3), (p6, 8), (p7, 4), _]
     distances = map (\(T2 line point) -> T2 point (nonNormalizedDistance line point)) (zip lines points) :: Acc (Vector (Point, Int))
     -- furthestPoints = map fst $ [_, (p2, 20), (p2, 20), (p2, 20), _, (p6, 8), (p6, 8), (p6, 8), (p6, 8), _]
     furthestPoints = map fst
-            $ propagateR headFlags
+            $ propagateR (shiftHeadFlagsL headFlags)
             $ segmentedScanl1 (\i1@(T2 _ d1) i2@(T2 _ d2) -> if d1 > d2 then i1 else i2) headFlags distances :: Acc (Vector Point)
 
     pointData = zip3 lines furthestPoints points :: Acc (Vector (Line, Point, Point))
@@ -165,7 +164,7 @@ partition (T2 headFlags points) =
         count = map (+1) $ propagateR (shiftHeadFlagsL headFlags) offset
         offset = boolToOffsetSegmented headFlags isLeftFirstSegment
 
-    offsetLeftSecond = boolToOffset isLeftSecondSegment :: Acc (Vector Int)
+    offsetLeftSecond = boolToOffsetSegmented headFlags isLeftSecondSegment :: Acc (Vector Int)
 
     -- the relative index (not taking other segments into consideration) in the new vector, if there is any
     destinations :: Acc (Vector (Maybe Int))
@@ -176,8 +175,9 @@ partition (T2 headFlags points) =
           point == p3    then Just_ (countLeftPointFst + 1) else if
           isPointLeftFst then Just_ (offsetPointLeftFst + 1) else if
           isPointLeftSnd then Just_ (1 + countLeftPointFst + offsetPointLeftSnd + 1)
-          else Nothing_
+          else                Nothing_
 
+    -- for calculating the real destinations
     indexScan, indexOffset :: Acc (Vector Int)
     indexScan = map (\n -> n - 1) $ scanl1 (+) $ map (\d -> if isJust d then 1 else 0) destinations
     indexOffset = propagateL headFlags indexScan
@@ -187,14 +187,17 @@ partition (T2 headFlags points) =
         (\(T2 destination offset) -> maybe Nothing_ (\n -> Just_ $ I1 (n + offset)) destination)
         (zip destinations indexOffset)
 
-    newPoints :: Acc (Vector Point)
-    newPoints = permute const defaultValues (realDestinations !) points where
-        newSize = the (fold1 (\_ b -> b) indexScan) - 1 :: Exp Int
+    intermeadiateHeadFlags = zipWith (==) points furthestPoints
+    newHeadFlags = zipWith (||) intermeadiateHeadFlags headFlags
+
+    newSegmentedPoints :: Acc (Vector (Bool, Point))
+    newSegmentedPoints = permute const defaultValues (realDestinations !) (zip newHeadFlags points) where
+        newSize = the (fold1 (\_ b -> b) indexScan) + 1 :: Exp Int
         -- if everything goes alright, the default value should never be used, however the permute function requires to have one
         defaultValues = fill (I1 newSize) undef
 
-    newHeadFlags :: Acc (Vector Bool) 
-    newHeadFlags = undefined
+    newPoints = map snd newSegmentedPoints
+    newReducedHeadFlags = map fst newSegmentedPoints
 
 
 
@@ -204,7 +207,7 @@ partition (T2 headFlags points) =
 --
 quickhull :: Acc (Vector Point) -> Acc (Vector Point)
 quickhull points =
-  final where
+  tail final where
     initial = initialPartition points
     -- as long as headFlags is not a list of only Trues, the algorithm isnt finished and the loop should be done again
     T2 _ final = awhile
@@ -239,7 +242,7 @@ segmentedScanr1 f headFlags values = map snd (scanr1 (flip $ segmented f) (zip h
 -- -----------------------
 
 pointIsLeftOfLine :: Exp Line -> Exp Point -> Exp Bool
-pointIsLeftOfLine (T2 (T2 x1 y1) (T2 x2 y2)) (T2 x y) = if y1 == y2 then y > y2 else nx * x + ny * y > c
+pointIsLeftOfLine (T2 (T2 x1 y1) (T2 x2 y2)) (T2 x y) = nx * x + ny * y > c
   where
     nx = y1 - y2
     ny = x2 - x1
